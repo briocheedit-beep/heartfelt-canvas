@@ -132,6 +132,57 @@
   --sidebar-ring: oklch(0.551 0.027 264.364);
 }
 
+/* Oboulo — ambiance « cahier d'écolier pro » : encre marine, papier crème, surligneur jaune */
+:root {
+  --paper: oklch(0.985 0.012 90);
+  --ink: oklch(0.27 0.07 260);
+  --ink-soft: oklch(0.45 0.05 260);
+  --highlight: oklch(0.88 0.16 95);
+  --highlight-foreground: oklch(0.25 0.05 80);
+  --margin-line: oklch(0.72 0.14 20);
+  --rule-line: oklch(0.9 0.03 240);
+  --primary: oklch(0.32 0.09 260);
+  --primary-foreground: oklch(0.985 0.012 90);
+  --background: var(--paper);
+  --foreground: var(--ink);
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
+  --color-margin-line: var(--margin-line);
+  --color-rule-line: var(--rule-line);
+  --font-sans: "Nunito Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Recolore toute l'appli existante (indigo/violet) en encre marine d'écolier */
+@theme {
+  --color-indigo-50: oklch(0.97 0.015 255);
+  --color-indigo-100: oklch(0.93 0.03 255);
+  --color-indigo-200: oklch(0.86 0.05 258);
+  --color-indigo-300: oklch(0.76 0.08 258);
+  --color-indigo-400: oklch(0.62 0.11 260);
+  --color-indigo-500: oklch(0.5 0.13 260);
+  --color-indigo-600: oklch(0.4 0.12 260);
+  --color-indigo-700: oklch(0.33 0.1 260);
+  --color-indigo-800: oklch(0.28 0.08 260);
+  --color-indigo-900: oklch(0.23 0.06 260);
+  --color-violet-50: oklch(0.97 0.015 245);
+  --color-violet-100: oklch(0.93 0.03 245);
+  --color-violet-200: oklch(0.86 0.05 245);
+  --color-violet-300: oklch(0.76 0.08 245);
+  --color-violet-400: oklch(0.64 0.11 245);
+  --color-violet-500: oklch(0.55 0.13 245);
+  --color-violet-600: oklch(0.47 0.13 248);
+  --color-violet-700: oklch(0.39 0.11 250);
+  --color-violet-800: oklch(0.32 0.09 252);
+  --color-violet-900: oklch(0.26 0.07 255);
+}
+
 @layer base {
   * {
     border-color: var(--color-border);
@@ -140,5 +191,23 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    font-family: var(--font-sans);
   }
+
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+}
+
+@utility notebook {
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(90deg, transparent 47px, color-mix(in oklab, var(--margin-line) 55%, transparent) 47px, color-mix(in oklab, var(--margin-line) 55%, transparent) 49px, transparent 49px),
+    repeating-linear-gradient(180deg, transparent 0 31px, var(--rule-line) 31px 32px);
+}
+
+@utility highlight-mark {
+  background: linear-gradient(180deg, transparent 55%, var(--highlight) 55%, var(--highlight) 90%, transparent 90%);
+  padding: 0 0.15em;
 }

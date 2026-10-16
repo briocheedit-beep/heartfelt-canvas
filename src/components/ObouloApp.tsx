@@ -1627,8 +1627,8 @@ function Connexion({ onConnexion }) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-violet-600 via-indigo-600 to-blue-500 flex p-4 py-8 overflow-y-auto">
-      <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md my-auto">
+    <div className="min-h-screen bg-gradient-to-br from-violet-600 via-indigo-600 to-blue-500 flex justify-center items-center p-4 py-8 overflow-y-auto">
+      <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md my-auto mx-auto">
         <div className="text-center mb-6">
           <Logo taille={72} />
           <h2 className="text-2xl font-bold text-gray-800 mt-2">Bienvenue sur Oboulo !</h2>

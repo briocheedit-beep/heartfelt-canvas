@@ -337,7 +337,7 @@ function Paywall({ scanMgr, onFermer, contexte, pageInit }) {
     // Production : la résiliation passe par le serveur, qui coupe l'abonnement chez Stripe
     // → plus AUCUN prélèvement, et effet immédiat (le webhook confirme la coupure).
     if (API_URL) {
-      try { await apiResilier(); }
+      try { await apiResilier(scanMgr.email); }
       catch { setErreur("Impossible de contacter le serveur — vérifie ta connexion et réessaie."); return; }
     }
     scanMgr.resilierPremium(); // coupure IMMÉDIATE : plus aucun prélèvement, scans illimités stoppés à l'instant

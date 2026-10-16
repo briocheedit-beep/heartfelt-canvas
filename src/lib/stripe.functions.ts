@@ -9,7 +9,7 @@ async function stripe(path: string, method = "GET", body?: Record<string, string
   const res = await fetch("https://api.stripe.com/v1/" + path, {
     method,
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/x-www-form-urlencoded" },
-    body: body ? new URLSearchParams(body).toString() : undefined,
+    body: body ? new URLSearchParams(body).toString() : null,
   });
   const data = await res.json();
   if (!res.ok) {
@@ -47,8 +47,8 @@ export const creerSessionCheckout = createServerFn({ method: "POST" })
       success_url: `${origin}/?paiement=ok`,
       cancel_url: `${origin}/?paiement=annule`,
     };
-    if (customer) params.customer = customer;
-    else params.customer_email = data.email;
+    if (customer) params["customer"] = customer;
+    else params["customer_email"] = data.email;
     const session = await stripe("checkout/sessions", "POST", params);
     return { url: session.url as string };
   });

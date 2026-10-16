@@ -2,39 +2,23 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
-// ==================== CONFIGURATION PAIEMENT (production) ====================
-// ⚠️ ÉTAT ACTUEL : MODE DÉMONSTRATION — aucun prélèvement réel n'est effectué.
-// Pour encaisser VRAIMENT les 1,99 €/mois :
-//   1. Déploie le backend décrit dans le guide (5 routes Stripe).
-//   2. Remplace null par l'URL de ton backend, ex : "https://api.oboulo.fr"
-// Tant que API_URL vaut null, l'appli garde le parcours de démonstration.
-const API_URL = null;
+import { creerSessionCheckout, statutPremium, resilierAbonnement } from "@/lib/stripe.functions";
 
-// Appel au backend : crée la session d'abonnement Stripe et renvoie l'URL de paiement sécurisée.
-// La carte bancaire est saisie UNIQUEMENT sur la page Stripe (jamais dans l'appli).
+// ==================== PAIEMENT STRIPE (réel) ====================
+const API_URL = "stripe";
+
 async function apiCreerSession(email) {
-  const res = await fetch(API_URL + "/creer-session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
-  });
-  if (!res.ok) throw new Error("serveur");
-  const data = await res.json();
-  return data.url; // URL hébergée par Stripe (CB, PayPal, Apple Pay, 3-D Secure réel)
+  const { url } = await creerSessionCheckout({ data: { email } });
+  return url;
 }
 
-// Résiliation côté serveur : coupe l'abonnement chez Stripe → plus aucun prélèvement, effet immédiat.
-async function apiResilier() {
-  const res = await fetch(API_URL + "/resilier", { method: "POST", headers: { "Content-Type": "application/json" } });
-  if (!res.ok) throw new Error("serveur");
+async function apiResilier(email) {
+  await resilierAbonnement({ data: { email } });
 }
 
-// Source de vérité : c'est le SERVEUR (informé par les webhooks Stripe) qui décide du statut premium.
 async function apiStatutPremium(email) {
-  const res = await fetch(API_URL + "/statut?email=" + encodeURIComponent(email));
-  if (!res.ok) throw new Error("serveur");
-  const data = await res.json();
-  return !!data.premium;
+  const { premium } = await statutPremium({ data: { email } });
+  return !!premium;
 }
 
 // ==================== UTILITAIRES ====================
@@ -353,7 +337,7 @@ function Paywall({ scanMgr, onFermer, contexte, pageInit }) {
     // Production : la résiliation passe par le serveur, qui coupe l'abonnement chez Stripe
     // → plus AUCUN prélèvement, et effet immédiat (le webhook confirme la coupure).
     if (API_URL) {
-      try { await apiResilier(); }
+      try { await apiResilier(scanMgr.email); }
       catch { setErreur("Impossible de contacter le serveur — vérifie ta connexion et réessaie."); return; }
     }
     scanMgr.resilierPremium(); // coupure IMMÉDIATE : plus aucun prélèvement, scans illimités stoppés à l'instant

@@ -155,6 +155,8 @@
   --color-highlight-foreground: var(--highlight-foreground);
   --color-margin-line: var(--margin-line);
   --color-rule-line: var(--rule-line);
+  --color-promo: var(--promo);
+  --color-promo-foreground: var(--promo-foreground);
   --font-sans: "Nunito Sans", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
 }
@@ -196,7 +198,7 @@
 
   h1, h2, h3 {
     font-family: var(--font-display);
-    letter-spacing: -0.02em;
+    letter-spacing: 0;
   }
 }
 
@@ -211,3 +213,19 @@
   background: linear-gradient(180deg, transparent 55%, var(--highlight) 55%, var(--highlight) 90%, transparent 90%);
   padding: 0 0.15em;
 }
+
+:root {
+  --promo: oklch(0.55 0.22 315);
+  --promo-foreground: oklch(1 0 0);
+  --paper: oklch(0.99 0.003 280);
+  --secondary: oklch(0.96 0.018 290);
+  --primary: oklch(0.48 0.19 285);
+  --primary-foreground: oklch(1 0 0);
+  --glass-shadow: 0 25px 50px oklch(0.2 0.03 280 / 0.25);
+  --glass-surface: linear-gradient(135deg, oklch(0.98 0.02 290 / 0.96), oklch(0.98 0.025 350 / 0.96), oklch(0.97 0.02 240 / 0.96));
+  --landing-veil: linear-gradient(90deg, var(--paper) 0%, color-mix(in oklab, var(--paper) 90%, transparent) 35%, transparent 80%);
+}
+.premium-glass { background: var(--glass-surface); backdrop-filter: blur(24px); box-shadow: var(--glass-shadow); }
+.landing-veil { background: var(--landing-veil); }
+@media (max-width: 640px) { .landing-veil { background: color-mix(in oklab, var(--paper) 84%, transparent); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }

@@ -1,7 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeader } from "@tanstack/react-start/server";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { PREMIUM_PRICE_ID, hasPremiumSubscription } from "./premium";
 
-const PRICE_ID = "price_1URELrLSwPuK4zaeAIr3SQcI";
+const PRICE_ID = PREMIUM_PRICE_ID;
 
 async function stripe(path: string, method = "GET", body?: Record<string, string>) {
   const key = process.env["STRIPE_SECRET_KEY"];
@@ -14,16 +16,10 @@ async function stripe(path: string, method = "GET", body?: Record<string, string
   const data = await res.json();
   if (!res.ok) {
     console.error("[stripe]", path, data?.error?.message);
-    throw new Error(data?.error?.message || "Erreur Stripe");
+    throw new Error("Le paiement est temporairement indisponible. Réessaie dans quelques instants.");
   }
   return data;
 }
-
-const emailInput = (input: { email: string }) => {
-  const email = String(input?.email || "").trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 255) throw new Error("Email invalide");
-  return { email };
-};
 
 async function findCustomer(email: string) {
   const list = await stripe("customers?limit=1&email=" + encodeURIComponent(email));
@@ -32,40 +28,62 @@ async function findCustomer(email: string) {
 
 async function activeSubs(customer: string) {
   const list = await stripe(`subscriptions?status=active&limit=10&customer=${customer}`);
-  return (list.data || []) as Array<{ id: string }>;
+  return (list.data || []) as Array<{ id: string; status: string; items: { data: Array<{ price: { id: string } }> } }>;
 }
 
 export const creerSessionCheckout = createServerFn({ method: "POST" })
-  .inputValidator(emailInput)
-  .handler(async ({ data }) => {
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { data: auth, error } = await context.supabase.auth.getUser();
+    if (error || !auth.user?.email || !auth.user.email_confirmed_at) throw new Error("Connecte-toi avec une adresse email confirmée.");
     const origin = getRequestHeader("origin") || "http://localhost:8080";
-    const customer = await findCustomer(data.email);
+    const customer = await findCustomer(auth.user.email);
+    if (customer && hasPremiumSubscription(await activeSubs(customer))) throw new Error("Ton abonnement Premium est déjà actif.");
     const params: Record<string, string> = {
       mode: "subscription",
       "line_items[0][price]": PRICE_ID,
       "line_items[0][quantity]": "1",
-      success_url: `${origin}/?paiement=ok`,
+      success_url: `${origin}/success`,
       cancel_url: `${origin}/?paiement=annule`,
+      client_reference_id: context.userId,
+      "subscription_data[metadata][user_id]": context.userId,
     };
     if (customer) params["customer"] = customer;
-    else params["customer_email"] = data.email;
+    else params["customer_email"] = auth.user.email;
     const session = await stripe("checkout/sessions", "POST", params);
+    if (typeof session.url !== "string" || !session.url.startsWith("https://checkout.stripe.com/")) throw new Error("Lien de paiement indisponible.");
     return { url: session.url as string };
   });
 
 export const statutPremium = createServerFn({ method: "POST" })
-  .inputValidator(emailInput)
-  .handler(async ({ data }) => {
-    const customer = await findCustomer(data.email);
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { data: auth, error } = await context.supabase.auth.getUser();
+    if (error || !auth.user?.email || !auth.user.email_confirmed_at) return { premium: false };
+    const customer = await findCustomer(auth.user.email);
     if (!customer) return { premium: false };
-    return { premium: (await activeSubs(customer)).length > 0 };
+    return { premium: hasPremiumSubscription(await activeSubs(customer)) };
   });
 
 export const resilierAbonnement = createServerFn({ method: "POST" })
-  .inputValidator(emailInput)
-  .handler(async ({ data }) => {
-    const customer = await findCustomer(data.email);
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { data: auth, error } = await context.supabase.auth.getUser();
+    if (error || !auth.user?.email) throw new Error("Connecte-toi pour gérer ton abonnement.");
+    const customer = await findCustomer(auth.user.email);
     if (!customer) return { ok: true };
-    for (const s of await activeSubs(customer)) await stripe(`subscriptions/${s.id}`, "DELETE");
+    for (const s of await activeSubs(customer)) if (hasPremiumSubscription([s])) await stripe(`subscriptions/${s.id}`, "DELETE");
     return { ok: true };
+  });
+
+export const portailAbonnement = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { data: auth, error } = await context.supabase.auth.getUser();
+    if (error || !auth.user?.email) throw new Error("Connecte-toi pour gérer ton abonnement.");
+    const customer = await findCustomer(auth.user.email);
+    if (!customer) throw new Error("Aucun abonnement trouvé.");
+    const origin = getRequestHeader("origin") || "http://localhost:8080";
+    const session = await stripe("billing_portal/sessions", "POST", { customer, return_url: `${origin}/` });
+    return { url: session.url as string };
   });

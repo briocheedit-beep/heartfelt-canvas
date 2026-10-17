@@ -2,24 +2,16 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
-import { creerSessionCheckout, statutPremium, resilierAbonnement } from "@/lib/stripe.functions";
+import { statutPremium } from "@/lib/stripe.functions";
+import { useServerFn } from "@tanstack/react-start";
+import { supabase } from "@/integrations/supabase/client";
+import Landing from "./Landing";
+import CloudConnexion from "./CloudConnexion";
+import Paywall from "./PremiumDialog";
+import { Button } from "@/components/ui/button";
 
 // ==================== PAIEMENT STRIPE (réel) ====================
 const API_URL = "stripe";
-
-async function apiCreerSession(email) {
-  const { url } = await creerSessionCheckout({ data: { email } });
-  return url;
-}
-
-async function apiResilier(email) {
-  await resilierAbonnement({ data: { email } });
-}
-
-async function apiStatutPremium(email) {
-  const { premium } = await statutPremium({ data: { email } });
-  return !!premium;
-}
 
 // ==================== UTILITAIRES ====================
 const JOURS = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
@@ -198,345 +190,6 @@ function Logo({ taille }) {
       {/* Texte Oboulo */}
       <text x="140" y="265" textAnchor="middle" fontFamily="system-ui, sans-serif" fontWeight="800" fontSize="48" fill="#111827">Oboulo</text>
     </svg>
-  );
-}
-
-// ---------- Sécurité du paiement : validation type banque ----------
-// Algorithme de Luhn : un vrai contrôle de validité du numéro de carte
-function luhnValide(numero) {
-  const n = numero.replace(/\D/g, "");
-  if (n.length < 15 || n.length > 16) return false;
-  let somme = 0;
-  for (let i = 0; i < n.length; i++) {
-    let d = parseInt(n[n.length - 1 - i]);
-    if (i % 2 === 1) { d *= 2; if (d > 9) d -= 9; }
-    somme += d;
-  }
-  return somme % 10 === 0;
-}
-// Réseau de la carte à partir du numéro
-function reseauCarte(numero) {
-  const n = numero.replace(/\D/g, "");
-  if (/^4/.test(n)) return "Visa";
-  if (/^(5[1-5]|2[2-7])/.test(n)) return "Mastercard";
-  if (/^3[47]/.test(n)) return "American Express";
-  return null;
-}
-// Date d'expiration valide (format MM/AA, mois 01-12, pas encore expirée)
-function expValide(exp) {
-  const m = /^(\d{2})\/(\d{2})$/.exec(exp);
-  if (!m) return false;
-  const mois = parseInt(m[1]), annee = 2000 + parseInt(m[2]);
-  if (mois < 1 || mois > 12) return false;
-  const maintenant = new Date();
-  const finMois = new Date(annee, mois, 1); // 1er du mois suivant = expiration passée
-  return finMois > maintenant;
-}
-
-// ---------- Paywall : offre Premium + bonus gemmes ----------
-function Paywall({ scanMgr, onFermer, contexte, pageInit }) {
-  const [page, setPage] = useState(pageInit === "resiliation" && scanMgr.premium ? "resiliation" : "choix"); // choix | pay | secu | payOk | resiliation | resilieOk
-  const [enCours, setEnCours] = useState(false);
-  const bonusActif = scanMgr.usage.bonus;
-  const [moyen, setMoyen] = useState("carte"); // carte | paypal | applepay
-  const [carte, setCarte] = useState({ numero: "", nom: "", exp: "", cvv: "" });
-  const [erreur, setErreur] = useState("");
-  const [paypalEmail, setPaypalEmail] = useState("");
-  const [payToken, setPayToken] = useState(null); // référence tokenisée (jamais la carte !)
-  // Sécurité anti-fraude : 3 essais ratés puis blocage temporaire
-  const [essais, setEssais] = useState(0);
-  const [blocage, setBlocage] = useState(0); // secondes restantes avant nouvel essai
-  const [codeSecu, setCodeSecu] = useState(""); // code 3-D Secure saisi
-  const [codeAttendu, setCodeAttendu] = useState(""); // code transmis par la banque (simulation)
-  const VIDER_CARTE = { numero: "", nom: "", exp: "", cvv: "" };
-
-  // Sécurité : à la fermeture de la fenêtre, on efface TOUTE donnée de paiement
-  useEffect(() => {
-    return () => { setCarte(VIDER_CARTE); setCodeSecu(""); setCodeAttendu(""); setPaypalEmail(""); };
-  }, []);
-  // Décompte du blocage anti-fraude
-  useEffect(() => {
-    if (blocage <= 0) return;
-    const t = setTimeout(() => setBlocage(blocage - 1), 1000);
-    return () => clearTimeout(t);
-  }, [blocage]);
-
-  const formaterCarte = (v) => v.replace(/\D/g, "").slice(0, 16).replace(/(.{4})/g, "$1 ").trim();
-  const formaterExp = (v) => { const d = v.replace(/\D/g, "").slice(0, 4); return d.length > 2 ? d.slice(0, 2) + "/" + d.slice(2) : d; };
-  const masquerCarte = (n) => "•••• •••• •••• " + n.replace(/\D/g, "").slice(-4);
-
-  const activerBonus = () => {
-    if (scanMgr.activerBonusJour()) { onFermer(); }
-  };
-
-  // Anti-fraude : chaque erreur de paiement compte ; 3 échecs = blocage 60 s
-  const essaiRate = (message) => {
-    setErreur(message);
-    const n = essais + 1;
-    setEssais(n);
-    if (n >= 3) { setBlocage(60); setEssais(0); }
-  };
-
-  const validerPaiement = () => {
-    if (blocage > 0) return;
-    setErreur("");
-    if (moyen === "carte") {
-      const n = carte.numero.replace(/\s/g, "");
-      const reseau = reseauCarte(n);
-      const longueurOk = reseau === "American Express" ? n.length === 15 : n.length === 16;
-      if (!longueurOk) { essaiRate("Numéro de carte invalide (16 chiffres, ou 15 pour American Express)."); return; }
-      if (!luhnValide(n)) { essaiRate("Numéro de carte refusé par le contrôle bancaire (Luhn) ❌ — vérifie les chiffres."); return; }
-      if (!reseau) { essaiRate("Carte non reconnue : seules Visa, Mastercard et American Express sont acceptées."); return; }
-      if (!/^[a-zA-ZÀ-ÿ' -]{2,}$/.test(carte.nom.trim())) { essaiRate("Nom du titulaire invalide (lettres uniquement)."); return; }
-      if (!expValide(carte.exp)) { essaiRate("Date d'expiration invalide ou carte expirée (MM/AA)."); return; }
-      const cvvAttendu = reseau === "American Express" ? 4 : 3;
-      if (carte.cvv.length !== cvvAttendu) { essaiRate("CVV invalide (" + cvvAttendu + " chiffres au dos de la carte)."); return; }
-      if (/^0+$/.test(carte.cvv)) { essaiRate("CVV refusé par la banque ❌ — vérifie les chiffres."); return; }
-    }
-    if (moyen === "paypal" && !emailValide(paypalEmail)) { essaiRate("Email PayPal invalide 📧"); return; }
-    setEnCours(true);
-    setTimeout(() => {
-      setEnCours(false);
-      // Authentification forte 3-D Secure : la banque transmet un code à usage unique
-      setCodeAttendu(String(Math.floor(100000 + Math.random() * 900000)));
-      setPage("secu");
-    }, 1500);
-  };
-
-  const confirmerCodeSecu = () => {
-    if (blocage > 0) return;
-    setErreur("");
-    if (codeSecu !== codeAttendu) {
-      setCarte(VIDER_CARTE); // sécurité : données effacées après échec d'authentification
-      setCodeSecu("");
-      essaiRate("Code 3-D Secure incorrect ❌ — par sécurité tes données de carte ont été effacées, recommence.");
-      setPage("pay");
-      return;
-    }
-    // Sécurité : on ne garde JAMAIS le numéro de carte — juste une référence masquée tokenisée
-    setPayToken(moyen === "carte" ? { type: reseauCarte(carte.numero), ref: masquerCarte(carte.numero) } : { type: moyen === "paypal" ? "PayPal" : "Apple Pay", ref: moyen === "paypal" ? paypalEmail : "Touch ID" });
-    setCarte(VIDER_CARTE); // effacement immédiat des données sensibles
-    setCodeSecu(""); setCodeAttendu("");
-    scanMgr.activerPremium();
-    setPage("payOk");
-  };
-
-  // Production : après le paiement, c'est le serveur qui confirme le statut premium (via webhook Stripe).
-  const verifierActivation = async () => {
-    setErreur("");
-    if (!API_URL) { scanMgr.activerPremium(); setPage("payOk"); return; } // mode démo
-    try {
-      const actif = await apiStatutPremium(scanMgr.email);
-      if (actif) { scanMgr.activerPremium(); setPage("payOk"); }
-      else setErreur("Le paiement n'est pas encore confirmé — réessaie dans quelques secondes.");
-    } catch { setErreur("Impossible de vérifier — vérifie ta connexion."); }
-  };
-
-  const resilier = async () => {
-    setErreur("");
-    // Production : la résiliation passe par le serveur, qui coupe l'abonnement chez Stripe
-    // → plus AUCUN prélèvement, et effet immédiat (le webhook confirme la coupure).
-    if (API_URL) {
-      try { await apiResilier(scanMgr.email); }
-      catch { setErreur("Impossible de contacter le serveur — vérifie ta connexion et réessaie."); return; }
-    }
-    scanMgr.resilierPremium(); // coupure IMMÉDIATE : plus aucun prélèvement, scans illimités stoppés à l'instant
-    setPage("resilieOk");
-  };
-
-  // Production : ouvre la page de paiement sécurisée Stripe (la carte y est saisie, jamais dans l'appli).
-  // Démo (API_URL null) : conserve le parcours de démonstration.
-  const lancerAbonnement = async () => {
-    setErreur("");
-    if (!API_URL) { setPage("pay"); return; } // mode démonstration
-    setEnCours(true);
-    try {
-      const url = await apiCreerSession(scanMgr.email);
-      setEnCours(false);
-      try { window.open(url, "_blank"); } catch { try { window.location.href = url; } catch {} }
-      setPage("attentePaiement");
-    } catch {
-      setEnCours(false);
-      setErreur("Impossible de démarrer le paiement — vérifie ta connexion et réessaie.");
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center p-4" onClick={onFermer}>
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-      <div className="relative bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm space-y-4 max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-        {page === "choix" && (
-          <>
-            <div className="text-center">
-              <div className="text-5xl mb-1">{scanMgr.premium ? "✨" : "🔒"}</div>
-              <h3 className="text-xl font-bold text-gray-800">{contexte || "Scans de cours"}</h3>
-              <p className="text-sm text-gray-500 mt-1">
-                {scanMgr.premium ? "Tu as déjà Premium 🎉" : "Version gratuite : corrigés de contrôle illimités ✅ · scans de cours 2/jour."}
-              </p>
-            </div>
-            {/* Option bonus gemmes */}
-            <div className={`rounded-2xl border p-4 ${bonusActif ? "bg-green-50 border-green-200" : "bg-cyan-50 border-cyan-200"}`}>
-              <p className="font-bold text-sm text-gray-800">💎 +1 scan de cours aujourd'hui</p>
-              <p className="text-xs text-gray-600 mt-0.5">Échange 100 gemmes contre un scan de cours supplémentaire, valable jusqu'à minuit. À activer quand tu veux !</p>
-              {bonusActif ? (
-                <p className="text-xs font-semibold text-green-600 mt-2">✅ Bonus déjà activé aujourd'hui</p>
-              ) : scanMgr.gems >= 100 ? (
-                <button onClick={activerBonus} className="w-full mt-2 bg-cyan-600 text-white rounded-xl py-2 text-sm font-semibold hover:bg-cyan-700">Activer (💎 100)</button>
-              ) : (
-                <p className="text-xs font-semibold text-amber-600 mt-2">Il te manque 💎 {100 - scanMgr.gems} — gagne des gemmes avec les QCM et la route !</p>
-              )}
-            </div>
-            {/* Option premium */}
-            <div className="rounded-2xl border-2 border-indigo-200 bg-gradient-to-br from-violet-50 to-indigo-50 p-4 relative overflow-hidden">
-              <span className="absolute top-2 right-2 text-[10px] font-bold bg-amber-400 text-amber-900 px-2 py-0.5 rounded-full">POPULAIRE</span>
-              <p className="font-bold text-sm text-gray-800">✨ Oboulo Premium</p>
-              <p className="text-2xl font-extrabold text-indigo-700 mt-1">1,99€ <span className="text-sm font-normal text-gray-500">/ mois</span></p>
-              <ul className="text-xs text-gray-600 mt-2 space-y-1">
-                <li>✅ Scans de cours <b>illimités</b> (exercices + QCM)</li>
-                <li>✅ Résiliable à tout moment (les scans illimités cessent à la résiliation)</li>
-                <li>ℹ️ Les corrigés de contrôle restent gratuits pour tous</li>
-              </ul>
-              {scanMgr.premium ? (
-                <button onClick={() => setPage("resiliation")} className="w-full mt-3 border border-red-200 text-red-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-red-50">Gérer / Résilier mon abonnement</button>
-              ) : (
-                <button onClick={lancerAbonnement} disabled={enCours} className="w-full mt-3 bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-xl py-2.5 text-sm font-bold hover:opacity-90 disabled:opacity-40">{enCours ? "Connexion au paiement sécurisé... ⏳" : "S'abonner — 1,99€/mois"}</button>
-              )}
-            </div>
-            <button onClick={onFermer} className="w-full text-center text-xs text-gray-400 hover:text-gray-600">Plus tard</button>
-          </>
-        )}
-        {page === "pay" && (
-          <>
-            {!API_URL && <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-[11px] text-amber-800 font-medium">🧪 Mode démonstration — aucun prélèvement réel. Branche le backend (voir guide) pour activer les vrais paiements Stripe.</div>}
-            <div className="text-center">
-              <div className="text-4xl mb-1">✨</div>
-              <h3 className="text-lg font-bold text-gray-800">Abonnement Oboulo Premium</h3>
-              <p className="text-sm text-gray-500">1,99€ par mois · sans engagement</p>
-            </div>
-            {/* Choix du moyen de paiement */}
-            <div>
-              <p className="text-xs font-bold text-gray-700 mb-1.5">Moyen de paiement</p>
-              <div className="grid grid-cols-3 gap-2">
-                {[{ id: "carte", icone: "💳", label: "Carte" }, { id: "paypal", icone: "🅿️", label: "PayPal" }, { id: "applepay", icone: "🍏", label: "Apple Pay" }].map((m) => (
-                  <button key={m.id} onClick={() => setMoyen(m.id)}
-                    className={`rounded-xl py-2 text-xs font-semibold border-2 transition ${moyen === m.id ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-gray-200 text-gray-500 hover:bg-gray-50"}`}>
-                    <span className="block text-lg leading-none mb-0.5">{m.icone}</span>{m.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {/* Formulaire selon le moyen choisi */}
-            {moyen === "carte" && (
-              <div className="space-y-2">
-                <div className="relative">
-                  <input value={carte.numero} onChange={(e) => setCarte({ ...carte, numero: formaterCarte(e.target.value) })} inputMode="numeric" autoComplete="cc-number" placeholder="Numéro de carte  •••• •••• •••• ••••"
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm tracking-wider focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                  {luhnValide(carte.numero) && reseauCarte(carte.numero) && (
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-green-600 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">{reseauCarte(carte.numero)} ✓</span>
-                  )}
-                </div>
-                <input value={carte.nom} onChange={(e) => setCarte({ ...carte, nom: e.target.value })} placeholder="Nom du titulaire" autoComplete="cc-name"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                <div className="grid grid-cols-2 gap-2">
-                  <input value={carte.exp} onChange={(e) => setCarte({ ...carte, exp: formaterExp(e.target.value) })} inputMode="numeric" placeholder="MM/AA" autoComplete="cc-exp"
-                    className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                  <input value={carte.cvv} onChange={(e) => setCarte({ ...carte, cvv: e.target.value.replace(/\D/g, "").slice(0, 4) })} inputMode="numeric" placeholder="CVV" type="password" autoComplete="cc-csc"
-                    className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                </div>
-                <p className="text-[10px] text-gray-400 flex items-center gap-1">🔒 Paiement chiffré — tes données bancaires ne sont jamais stockées sur l'appareil.</p>
-              </div>
-            )}
-            {moyen === "paypal" && (
-              <div className="space-y-2">
-                <input value={paypalEmail} onChange={(e) => setPaypalEmail(e.target.value)} placeholder="Email de ton compte PayPal" inputMode="email"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-                <p className="text-[10px] text-gray-400">🅿️ Tu seras redirigé vers la page sécurisée PayPal pour confirmer.</p>
-              </div>
-            )}
-            {moyen === "applepay" && (
-              <div className="space-y-1">
-                <div className="bg-black text-white rounded-xl p-3 text-center text-sm font-semibold">🍎 Payer avec Apple Pay</div>
-                <p className="text-[10px] text-gray-400 text-center">Authentification par Face ID / Touch ID — aucune donnée de carte transmise.</p>
-              </div>
-            )}
-            {erreur && <p className="text-xs font-semibold text-red-600">⚠️ {erreur}</p>}
-            {blocage > 0 && <p className="text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-center">🔒 Trop de tentatives : nouvel essai possible dans {blocage} s.</p>}
-            <div className="bg-gray-50 rounded-xl p-3 flex justify-between text-sm"><span className="text-gray-600">À prélever aujourd'hui</span><b>1,99€</b></div>
-            <p className="text-[10px] text-gray-400 text-center">Démonstration : aucun prélèvement réel n'est effectué.</p>
-            <button onClick={validerPaiement} disabled={enCours || blocage > 0 || (moyen === "carte" && (!carte.numero || !carte.nom || !carte.exp || !carte.cvv))}
-              className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-xl py-3 font-bold hover:opacity-90 disabled:opacity-40">
-              {enCours ? "Paiement sécurisé en cours... ⏳" : "Payer 1,99€ et activer Premium"}
-            </button>
-            <button onClick={() => setPage("choix")} className="w-full text-center text-xs text-gray-400 hover:text-gray-600">← Retour</button>
-          </>
-        )}
-        {page === "secu" && (
-          <div className="space-y-3 text-center">
-            <div className="text-4xl">🏦</div>
-            <h3 className="text-lg font-bold text-gray-800">Authentification 3-D Secure</h3>
-            <p className="text-sm text-gray-500">Ta banque t'a envoyé un code à usage unique pour valider le prélèvement de 1,99€.</p>
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800">
-              📱 (Démo) Code reçu : <b className="tracking-widest text-base">{codeAttendu}</b>
-            </div>
-            <input value={codeSecu} onChange={(e) => setCodeSecu(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="• • • • • •"
-              className="w-full border border-gray-200 rounded-xl px-3 py-2 text-center text-lg tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-indigo-300" />
-            {erreur && <p className="text-xs font-semibold text-red-600">⚠️ {erreur}</p>}
-            <button onClick={confirmerCodeSecu} disabled={codeSecu.length !== 6}
-              className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-xl py-3 font-bold hover:opacity-90 disabled:opacity-40">Valider le code sécurisé</button>
-            <button onClick={() => { setCodeSecu(""); setCodeAttendu(""); setPage("pay"); }} className="w-full text-center text-xs text-gray-400 hover:text-gray-600">← Annuler le paiement</button>
-          </div>
-        )}
-        {page === "attentePaiement" && (
-          <div className="text-center space-y-3">
-            <div className="text-5xl animate-pulse">🔐</div>
-            <h3 className="text-lg font-bold text-gray-800">Paiement sécurisé Stripe ouvert</h3>
-            <p className="text-sm text-gray-500">Saisis ta carte sur la page Stripe sécurisée. Dès que le paiement est confirmé, Premium s'active automatiquement.</p>
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800">🔒 Ta carte est saisie uniquement chez Stripe — Oboulo n'y a jamais accès.</div>
-            <button onClick={verifierActivation} className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-xl py-2.5 text-sm font-bold hover:opacity-90">J'ai payé — vérifier mon Premium ✨</button>
-            <button onClick={onFermer} className="w-full text-center text-xs text-gray-400 hover:text-gray-600">Fermer</button>
-          </div>
-        )}
-        {page === "payOk" && (
-          <div className="text-center space-y-3">
-            <div className="text-6xl">🎉</div>
-            <h3 className="text-xl font-bold text-gray-800">Bienvenue dans Premium !</h3>
-            <p className="text-sm text-gray-500">Tes scans de cours sont maintenant illimités. Tu peux résilier à tout moment depuis l'écran « Gérer mon abonnement ».</p>
-            {payToken && (
-              <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-xs text-green-800 text-left">
-                <p>✅ Paiement confirmé via <b>{payToken.type}</b> — référence <b>{payToken.ref}</b></p>
-                <p className="mt-1">🔒 Par sécurité, tes données bancaires ont été effacées de l'appareil.</p>
-              </div>
-            )}
-            <button onClick={onFermer} className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-xl py-3 font-semibold hover:opacity-90">C'est parti ✨</button>
-          </div>
-        )}
-        {page === "resiliation" && (
-          <div className="space-y-3">
-            <div className="text-center">
-              <div className="text-4xl mb-1">✨</div>
-              <h3 className="text-lg font-bold text-gray-800">Gérer mon abonnement</h3>
-              <p className="text-sm text-gray-500">Premium actif · 1,99€/mois</p>
-            </div>
-            <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-xs text-green-800">✅ Scans de cours illimités actifs</div>
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-              ℹ️ Effet <b>immédiat</b> : dès la résiliation, tu n'es plus prélevé·e et les scans illimités sont stoppés à l'instant (retour à <b>2 scans de cours/jour</b> — les corrigés de contrôle restent gratuits et illimités).
-            </div>
-            <button onClick={resilier} className="w-full bg-red-600 text-white rounded-xl py-2.5 text-sm font-bold hover:bg-red-700">Résilier en 1 clic — effet immédiat</button>
-            <p className="text-[10px] text-gray-400 text-center">Sans justification, sans frais. Tu pourras te réabonner quand tu veux.</p>
-            <button onClick={onFermer} className="w-full text-center text-xs text-gray-400 hover:text-gray-600">Fermer</button>
-          </div>
-        )}
-        {page === "resilieOk" && (
-          <div className="text-center space-y-3">
-            <div className="text-6xl">✅</div>
-            <h3 className="text-xl font-bold text-gray-800">Résiliation confirmée</h3>
-            <p className="text-sm text-gray-500">Tu ne seras <b>plus jamais prélevé</b>. Les scans de cours illimités sont <b>stoppés immédiatement</b> : tu retrouves les 2 scans gratuits par jour (les corrigés de contrôle restent gratuits et illimités).</p>
-            <div className="bg-gray-50 border border-gray-100 rounded-xl p-3 text-xs text-gray-500">L'abonnement a pris fin à l'instant — aucune facture à venir, aucune action supplémentaire.</div>
-            <button onClick={onFermer} className="w-full bg-gray-100 text-gray-600 rounded-xl py-3 font-semibold hover:bg-gray-200">Fermer</button>
-          </div>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -1053,13 +706,13 @@ function matieresDepuisCours(cours) {
 // ==================== GÉNÉRATEUR IA DE RÉVISIONS (simulation) ====================
 function genererSeances(cours, matieres) {
   // --- Analyse fine de l'EDT : créneaux libres en soirée (17h → 21h) ---
-  const minutes = (h) => parseInt(h.slice(0, 2)) * 60 + parseInt(h.slice(3, 5));
+  const minutes = (h) => { if (typeof h === "number") return Number.isFinite(h) ? h : NaN; if (typeof h !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(h)) return NaN; return Number(h.substring(0, 2)) * 60 + Number(h.substring(3, 5)); };
   const hhmm = (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
-  const SOIR_DEB = 17 * 60, SOIR_FIN = 21 * 60, DUREE_MIN = 30;
+  const SOIR_DEB = 17 * 60, SOIR_FIN = 18 * 60 + 30, DUREE_MIN = 30;
 
   const creneaux = [];
   JOURS.forEach((j) => {
-    const journees = cours.filter((c) => c.jour === j)
+    const journees = cours.filter((c) => c.jour === j && Number.isFinite(minutes(c.debut)) && Number.isFinite(minutes(c.fin)))
       .sort((a, b) => minutes(a.debut) - minutes(b.debut));
     // fusions des chevauchements
     const occupe = [];
@@ -1080,8 +733,8 @@ function genererSeances(cours, matieres) {
 
   // Ne garder que les créneaux d'assez grande taille, triés : les plus longs d'abord
   const utilisables = creneaux
-    .filter((c) => minutes(c.fin) - minutes(c.debut) >= DUREE_MIN)
-    .sort((a, b) => (minutes(b.fin) - minutes(b.debut)) - (minutes(a.fin) - minutes(a.debut)));
+    .filter((c) => c.fin - c.debut >= DUREE_MIN)
+    .sort((a, b) => (b.fin - b.debut) - (a.fin - a.debut));
 
   // Jours les plus chargés en cours = moins de séances attribuées
   const chargeJour = {}; JOURS.forEach((j) => {
@@ -1100,21 +753,22 @@ function genererSeances(cours, matieres) {
       .sort((a, b) =>
         ((parJour[b.jour] || 0) - (parJour[a.jour] || 0)) * 2 +                 // privilégier les jours peu utilisés
         (chargeJour[a.jour] - chargeJour[b.jour]) / 60 +                        // éviter les jours très chargés en cours
-        ((minutes(b.fin) - minutes(b.debut)) - (minutes(a.fin) - minutes(a.debut))) / 30
+        ((b.fin - b.debut) - (a.fin - a.debut)) / 30
       );
     const cr = candidats[0];
     if (!cr) return;
-    const dispo = minutes(cr.fin) - minutes(cr.debut);
+    const dispo = cr.fin - cr.debut;
     const duree = dispo >= 60 ? 45 : Math.max(30, dispo); // durée adaptée au créneau
     seances.push({
       id: nouvelId(),
       matiere: m.nom,
       couleur: m.couleur,
       jour: cr.jour,
-      heure: hhmm(minutes(cr.debut)),
+      heure: hhmm(cr.debut),
       duree,
       fait: false,
     });
+    cr.debut += duree + 10;
     parJour[cr.jour] = (parJour[cr.jour] || 0) + 1;
     parMatiere[m.nom] = (parMatiere[m.nom] || 0) + 1;
   });
@@ -1701,15 +1355,27 @@ function VuePhoto({ profil, onGagnerGems, maxPhotos, scanMgr }) {
 
 // ==================== APP PRINCIPALE ====================
 export default function App() {
-  const [session, setSession] = useState(() => load("session", null));
-  const deconnexion = () => { save("session", null); setSession(null); };
-  const connecter = (email) => { save("session", email); setSession(email); };
-  if (!session) return <Connexion onConnexion={connecter} />;
-  // clé de remontée : si on change de compte, l'app est réinitialisée avec SES données
-  return <ObouloApp key={session} emailUtil={session} onDeconnexion={deconnexion} />;
+  const [session, setSession] = useState(null);
+  const [ready, setReady] = useState(false);
+  const [auth, setAuth] = useState(false);
+  const [subscribe, setSubscribe] = useState(false);
+  useEffect(() => {
+    let active = true;
+    supabase.auth.getUser().then(({ data }) => { if (active) { setSession(data.user); setReady(true); } });
+    const { data } = supabase.auth.onAuthStateChange((event, next) => {
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "USER_UPDATED") { setSession(next?.user || null); setReady(true); }
+    });
+    if (sessionStorage.getItem("oboulo-subscribe") === "yes") setSubscribe(true);
+    return () => { active = false; data.subscription.unsubscribe(); };
+  }, []);
+  const deconnexion = async () => { await supabase.auth.signOut(); setSession(null); setAuth(false); };
+  if (!ready) return <div className="min-h-screen bg-paper" />;
+  if (!session) return auth ? <CloudConnexion onRetour={() => setAuth(false)} /> : <Landing onCommencer={(premium) => { setSubscribe(!!premium); sessionStorage.setItem("oboulo-subscribe", premium ? "yes" : "no"); setAuth(true); }} />;
+  return <ObouloApp key={session.id} emailUtil={session.email} onDeconnexion={deconnexion} subscribe={subscribe} />;
 }
 
-function ObouloApp({ emailUtil, onDeconnexion }) {
+function ObouloApp({ emailUtil, onDeconnexion, subscribe }) {
+  const checkPremium = useServerFn(statutPremium);
   const [installe, setInstalle] = useState(() => loadU(emailUtil, "installe", false));
   const [profil, setProfil] = useState(() => loadU(emailUtil, "profil", null));
   const [cours, setCours] = useState(() => loadU(emailUtil, "cours", []));
@@ -1726,7 +1392,8 @@ function ObouloApp({ emailUtil, onDeconnexion }) {
   const [menuOuvert, setMenuOuvert] = useState(false);
   const [gems, setGems] = useState(() => loadU(emailUtil, "gems", 0));
   const [recompenses, setRecompenses] = useState(() => loadU(emailUtil, "recompenses", []));
-  const [premium, setPremium] = useState(() => loadU(emailUtil, "premium", false));
+  const [premium, setPremium] = useState(false);
+  const [premiumReady, setPremiumReady] = useState(false);
   const [usage, setUsage] = useState(() => loadU(emailUtil, "usage", { date: "", scans: 0, bonus: false }));
   const [offreVue, setOffreVue] = useState(() => loadU(emailUtil, "offreVue", false));
   const [offreOuverte, setOffreOuverte] = useState(false);
@@ -1742,26 +1409,29 @@ function ObouloApp({ emailUtil, onDeconnexion }) {
   }, []);
   const quotaJour = premium ? Infinity : 2 + (usage.bonus ? 1 : 0);
   const scanRestants = premium ? "∞" : Math.max(0, quotaJour - usage.scans);
-  const peutScanner = () => premium || usage.scans < quotaJour;
+  const peutScanner = () => premiumReady && (premium || usage.scans < quotaJour);
   const consommerScan = () => { if (!premium) setUsage({ ...usage, scans: usage.scans + 1 }); };
   const activerBonusJour = () => { if (gems >= 100) { setGems(gems - 100); setUsage({ ...usage, bonus: true }); return true; } return false; };
-  const activerPremium = () => setPremium(true);
+  const activerPremium = async () => { try { const result = await checkPremium(); setPremium(result.premium); } catch { setPremium(false); } };
   const resilierPremium = () => setPremium(false);
   const scanMgr = { premium, usage, quotaJour, scanRestants, peutScanner, consommerScan, activerBonusJour, activerPremium, resilierPremium, gems, email: emailUtil };
   const maxPhotos = 4;
 
-  useEffect(() => { saveU(emailUtil, "installe", installe); saveU(emailUtil, "profil", profil); saveU(emailUtil, "cours", cours); saveU(emailUtil, "matieres", matieres); saveU(emailUtil, "seances", seances); saveU(emailUtil, "evenements", evenements); saveU(emailUtil, "gems", gems); saveU(emailUtil, "recompenses", recompenses); saveU(emailUtil, "premium", premium); saveU(emailUtil, "usage", usage); saveU(emailUtil, "offreVue", offreVue); }, [installe, profil, cours, matieres, seances, evenements, gems, recompenses, premium, usage, offreVue]);
+  useEffect(() => { saveU(emailUtil, "installe", installe); saveU(emailUtil, "profil", profil); saveU(emailUtil, "cours", cours); saveU(emailUtil, "matieres", matieres); saveU(emailUtil, "seances", seances); saveU(emailUtil, "evenements", evenements); saveU(emailUtil, "gems", gems); saveU(emailUtil, "recompenses", recompenses); saveU(emailUtil, "usage", usage); saveU(emailUtil, "offreVue", offreVue); }, [installe, profil, cours, matieres, seances, evenements, gems, recompenses, premium, usage, offreVue]);
 
-  // Production : à chaque ouverture de l'appli, c'est le SERVEUR (webhooks Stripe) qui décide du statut premium.
-  // Le téléphone ne fait que cacher ce statut — il ne peut plus se « débloquer » Premium tout seul.
   useEffect(() => {
-    if (!installe || !profil || !API_URL) return;
-    let annule = false;
-    apiStatutPremium(emailUtil)
-      .then((actif) => { if (!annule && actif !== premium) setPremium(actif); })
-      .catch(() => {});
-    return () => { annule = true; };
-  }, [installe]);
+    let active = true;
+    const verify = async () => {
+      try { const result = await checkPremium(); if (active) setPremium(result.premium); }
+      catch { if (active) setPremium(false); }
+      finally { if (active) setPremiumReady(true); }
+    };
+    verify();
+    const interval = setInterval(verify, 60000);
+    window.addEventListener("focus", verify);
+    return () => { active = false; clearInterval(interval); window.removeEventListener("focus", verify); };
+  }, [emailUtil]);
+  useEffect(() => { if (subscribe && installe) { setOffreOuverte(true); sessionStorage.removeItem("oboulo-subscribe"); } }, [subscribe, installe]);
 
   // Présentation de l'offre au début de la connexion (1 fois, si pas premium)
   useEffect(() => { if (installe && !offreVue && !premium) { setOffreOuverte(true); setOffreVue(true); } }, [installe]);
@@ -1804,6 +1474,11 @@ function ObouloApp({ emailUtil, onDeconnexion }) {
         <div className="bg-gradient-to-br from-cyan-400 to-teal-500 rounded-2xl p-4 text-center text-white shadow-lg transform hover:scale-105 transition"><p className="text-2xl font-extrabold">💎 {gems}</p><p className="text-[11px] font-medium opacity-90">Gemmes</p></div>
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rule-line bg-card p-4">
+        <div><p className="font-bold text-ink">{premium ? "Premium actif ✅" : "Un coup de pouce pour tes cours ✨"}</p><p className="text-sm text-ink-soft">{premium ? "Tes scans sont illimités" : "1,99€/mois · scans illimités"}</p></div>
+        <Button onClick={() => setOffreOuverte(true)}>{premium ? "Mon abonnement" : "Passer Premium"}</Button>
+      </div>
+
       {/* ===== Route de révisions ===== */}
       <Card>
         <div className="flex items-center justify-between mb-3">
@@ -1841,7 +1516,7 @@ function ObouloApp({ emailUtil, onDeconnexion }) {
             {seancesFaitesD >= ROUTE[ROUTE.length - 1].objectif ? "👑 Route terminée, bravo champion !" : `Prochaine étape : ${etapeRoute.objectif - seancesFaitesD} séance(s) restante(s) pour gagner 💎${etapeRoute.gems}`}
           </div>
         )}
-        {/* Statut des scans du jour — sans bouton d'abonnement */}
+        {/* Statut et abonnement */}
         <div className="bg-white border border-gray-200 rounded-2xl p-3 flex items-center gap-3 shadow-sm">
           <span className="text-xl">{premium ? "✨" : usage.scans >= quotaJour ? "🔒" : "🔑"}</span>
           <p className={`text-xs ${premium ? "text-gray-600" : "text-gray-500"}`}>
@@ -2189,7 +1864,7 @@ function ObouloApp({ emailUtil, onDeconnexion }) {
   ];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-purple-100 to-pink-100 pb-28">
+    <div className="min-h-screen notebook pb-28">
       <div className="max-w-2xl mx-auto p-4">
         <header className="flex items-center justify-between py-4">
           <div className="flex items-center gap-1.5">

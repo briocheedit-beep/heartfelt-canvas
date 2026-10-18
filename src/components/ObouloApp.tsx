@@ -349,6 +349,50 @@ function trierSeances(liste) {
   return [...liste].sort((a, b) => (RANG_JOUR[a.jour] || 0) - (RANG_JOUR[b.jour] || 0) || (a.heure || "").localeCompare(b.heure || ""));
 }
 
+// ---------- Règles de planification des révisions ----------
+const FIN_REVISIONS = 18 * 60 + 30; // aucune séance après 18h30
+const QUOTA_JOUR_MIN = 90;          // maximum 1h30 de révisions par jour
+function hhmmVersMin(h) {
+  if (typeof h !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(h)) return NaN;
+  return Number(h.substring(0, 2)) * 60 + Number(h.substring(3, 5));
+}
+function minVersHhmm(m) {
+  return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+}
+function minutesSeancesJour(seances, jour, saufId) {
+  return seances.filter((s) => s.jour === jour && s.id !== saufId).reduce((t, s) => t + (s.duree || 0), 0);
+}
+// Renvoie null si la séance respecte les règles, sinon le message d'erreur
+function verifierSeance(seances, s, saufId) {
+  const d = hhmmVersMin(s.heure);
+  if (!Number.isFinite(d)) return "Heure invalide.";
+  if (!s.duree || s.duree < 15) return "Durée trop courte (15 min minimum).";
+  if (d + s.duree > FIN_REVISIONS) return "Les révisions finissent au plus tard à 18h30.";
+  if (minutesSeancesJour(seances, s.jour, saufId) + s.duree > QUOTA_JOUR_MIN) return "Maximum 1h30 de révisions par jour.";
+  return null;
+}
+// Réduit une photo (max 800px, JPEG) pour pouvoir la stocker localement
+function reduirePhoto(fichier) {
+  return new Promise((resolve, reject) => {
+    const lecteur = new FileReader();
+    lecteur.onerror = reject;
+    lecteur.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const ratio = Math.min(1, 800 / Math.max(img.width, img.height));
+        const toile = document.createElement("canvas");
+        toile.width = Math.round(img.width * ratio);
+        toile.height = Math.round(img.height * ratio);
+        toile.getContext("2d").drawImage(img, 0, 0, toile.width, toile.height);
+        resolve(toile.toDataURL("image/jpeg", 0.7));
+      };
+      img.src = lecteur.result;
+    };
+    lecteur.readAsDataURL(fichier);
+  });
+}
+
 // ---------- Scan photo de l'emploi du temps (simulation IA) ----------
 function ScanEdtPhoto({ onValider }) {
   const [phase, setPhase] = useState(0); // 0: capture, 1: scan, 2: détection

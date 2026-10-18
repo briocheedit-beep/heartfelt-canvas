@@ -31,8 +31,8 @@ export default function CloudConnexion({ onRetour }: { onRetour: () => void }) {
     finally { setBusy(false); }
   }
   return <main className="notebook flex min-h-screen items-center justify-center px-5 py-10">
-    <section className="w-full max-w-md rounded-2xl border border-rule-line bg-card p-7 shadow-xl">
-      <Button variant="ghost" onClick={onRetour}>← Oboulo</Button>
+    <section className="w-full max-w-md rounded-2xl border border-rule-line bg-card p-7 text-center shadow-xl">
+      <div className="flex justify-center"><Button variant="ghost" onClick={onRetour}>← Oboulo</Button></div>
       <h1 className="mt-5 font-display text-3xl font-extrabold">{signup ? "Ton aventure commence ici ✨" : "Content de te revoir 👋"}</h1>
       <div className="my-6 grid grid-cols-2 gap-2"><Button variant={!signup ? "default" : "secondary"} onClick={() => { setSignup(false); setMessage(""); }}>Se connecter</Button><Button variant={signup ? "default" : "secondary"} onClick={() => { setSignup(true); setMessage(""); }}>S’inscrire</Button></div>
       <form onSubmit={submit} className="space-y-4">

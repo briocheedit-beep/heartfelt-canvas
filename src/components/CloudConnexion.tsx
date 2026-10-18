@@ -31,13 +31,13 @@ export default function CloudConnexion({ onRetour }: { onRetour: () => void }) {
     finally { setBusy(false); }
   }
   return <main className="notebook flex min-h-screen items-center justify-center px-5 py-10">
-    <section className="w-full max-w-md rounded-2xl border border-rule-line bg-card p-7 shadow-xl">
-      <Button variant="ghost" onClick={onRetour}>← Oboulo</Button>
+    <section className="w-full max-w-md rounded-2xl border border-rule-line bg-card p-7 text-center shadow-xl">
+      <div className="flex justify-center"><Button variant="ghost" onClick={onRetour}>← Oboulo</Button></div>
       <h1 className="mt-5 font-display text-3xl font-extrabold">{signup ? "Ton aventure commence ici ✨" : "Content de te revoir 👋"}</h1>
       <div className="my-6 grid grid-cols-2 gap-2"><Button variant={!signup ? "default" : "secondary"} onClick={() => { setSignup(false); setMessage(""); }}>Se connecter</Button><Button variant={signup ? "default" : "secondary"} onClick={() => { setSignup(true); setMessage(""); }}>S’inscrire</Button></div>
       <form onSubmit={submit} className="space-y-4">
-        <label className="block text-sm font-semibold">Adresse email<input required type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-3" /></label>
-        <label className="block text-sm font-semibold">Mot de passe<input required minLength={8} type="password" autoComplete={signup ? "new-password" : "current-password"} value={password} onChange={e => setPassword(e.target.value)} className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-3" /></label>
+        <label className="block text-sm font-semibold">Adresse email<input required type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-3 text-center" /></label>
+        <label className="block text-sm font-semibold">Mot de passe<input required minLength={8} type="password" autoComplete={signup ? "new-password" : "current-password"} value={password} onChange={e => setPassword(e.target.value)} className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-3 text-center" /></label>
         {message && <p role="status" className="text-sm text-ink-soft">{message}</p>}
         <Button disabled={busy} className="h-12 w-full" type="submit">{busy ? "Un instant…" : signup ? "Créer mon compte ✨" : "Se connecter →"}</Button>
       </form>
